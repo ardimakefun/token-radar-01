@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch Radar — pre-token protocols, ranked by implied value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><span class="brand-dot"></span><span class="brand-name">Launch Radar</span><span class="brand-sub">Pre-token protocol index</span></div>
+    <div class="topbar-meta" id="top-meta">Snapshot — · DefiLlama protocol index · model —</div>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>Every protocol still waiting on its token, ranked by what the launch would be worth.</h1>
+    <p class="lede">The board starts from the forty protocols with at least $50M of TVL that record no token, then adds every smaller launch candidate the snapshot holds. Each one is valued from its own figures — its TVL, its seven-day growth, and how long it has run with no token — against the launched protocols in its own category. Implied value is this entry&rsquo;s own claim, never a price, and never a prediction of whether or when a token is issued.</p>
+    <p class="honest">Honest language: a protocol &ldquo;records no token&rdquo; when the snapshot records none for it. That is not proof it has none.</p>
+  </section>
+
+  <section class="stats" id="stats" aria-label="Coverage"></section>
+
+  <section class="method" id="method">
+    <h2>How the value is worked out</h2>
+    <p>Implied value = TVL &times; comparable multiple &times; growth multiplier &times; tenure multiplier. The comparable multiple is the median market-cap / TVL of the launched protocols in the same category — at least three launched peers, or the market-wide median when a category has fewer. Growth is the seven-day TVL change, clamped to &minus;50% … +100% and weighted 0.6. Tenure runs from 0.85 for a protocol tracked a day to 1.15 for one tracked four years with no token. The same function scores every row; no protocol name is ever special-cased.</p>
+    <table class="multiples" id="multiples">
+      <thead><tr><th>Category</th><th>Comparable multiple</th><th>Launched peers</th><th>Source</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="controls" aria-label="Filters">
+    <div class="control">
+      <label for="q">Search</label>
+      <input id="q" type="search" placeholder="Search name or chain" autocomplete="off">
+    </div>
+    <div class="control">
+      <label for="cat">Category</label>
+      <select id="cat"><option value="">All categories</option></select>
+    </div>
+    <div class="control">
+      <label for="chain">Chain</label>
+      <select id="chain"><option value="">All chains</option></select>
+    </div>
+    <div class="control">
+      <label for="band">Implied value</label>
+      <select id="band">
+        <option value="">All values</option>
+        <option value="100">$100M and over</option>
+        <option value="10">$10M – $100M</option>
+        <option value="1">Under $10M</option>
+      </select>
+    </div>
+    <div class="control">
+      <label for="scope">Rows</label>
+      <select id="scope">
+        <option value="all">Watchlist + early</option>
+        <option value="watch">Watchlist only</option>
+        <option value="early">Early rows only</option>
+      </select>
+    </div>
+    <div class="control">
+      <label for="view">Token status</label>
+      <select id="view">
+        <option value="pre">Pre-token board</option>
+        <option value="live">Live token</option>
+      </select>
+    </div>
+    <p class="rowcount" id="rowcount"></p>
+  </section>
+
+  <section class="board-wrap">
+    <table class="board" id="board">
+      <thead>
+        <tr>
+          <th data-sort="rank" class="sortable">Rank</th>
+          <th data-sort="name" class="sortable">Protocol</th>
+          <th data-sort="tvl" class="sortable num">TVL</th>
+          <th data-sort="growth" class="sortable num">7d</th>
+          <th data-sort="age" class="sortable num">Age</th>
+          <th data-sort="multiple" class="sortable num">Multiple</th>
+          <th data-sort="implied" class="sortable num">Implied value</th>
+          <th>Token</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="board-note">Click a row for its model breakdown and farm plan. Rank is the model&rsquo;s claim, not the table&rsquo;s sort order.</p>
+  </section>
+
+  <section class="detail" id="detail" aria-label="Protocol detail"></section>
+
+  <section class="live" id="live">
+    <h2>Already trading — the market&rsquo;s own value</h2>
+    <p>These protocols record a token that already trades, so the board shows the market&rsquo;s own market cap for them, never a model&rsquo;s number. They are set aside from the ranking, and shown here so the reader can see what launched peers are worth.</p>
+    <table class="board live-table" id="live-table">
+      <thead><tr><th>Protocol</th><th>Category</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">7d</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <footer class="foot">
+    <p>Data: DefiLlama protocol index, snapshot <span id="foot-date"></span>. Model <span id="foot-model"></span>. Built by an AI agent for make.fun&rsquo;s token launch radar bounty. Farm steps are generated from each protocol&rsquo;s own record; where the snapshot records no points program, the plan says so instead of inventing one.</p>
+  </footer>
+</main>
+
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
