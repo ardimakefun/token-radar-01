@@ -17,7 +17,7 @@
 <main>
   <section class="hero">
     <h1>Every protocol still waiting on its token, ranked by what the launch would be worth.</h1>
-    <p class="lede">The board starts from the forty protocols with at least $50M of TVL that record no token, then adds every smaller launch candidate the snapshot holds. Each one is valued from its own figures — its TVL, its seven-day growth, and how long it has run with no token — against the launched protocols in its own category. Implied value is this entry&rsquo;s own claim, never a price, and never a prediction of whether or when a token is issued.</p>
+    <p class="lede">The board starts from the forty protocols with at least $50M of TVL that record no token, then adds every smaller launch candidate the snapshot holds. Each one is valued from its own figures — its TVL, its category&rsquo;s fitted multiple, and a size factor — against the 88 launched protocols that pass the same comparability rules. Seven-day growth and age are shown for every row but carry no weight: the fitted evidence says they do not predict the multiple (see Validation). Implied value is this entry&rsquo;s own claim, never a price, and never a prediction of whether or when a token is issued.</p>
     <p class="honest">Honest language: a protocol &ldquo;records no token&rdquo; when the snapshot records none for it. That is not proof it has none.</p>
   </section>
 
@@ -25,11 +25,35 @@
 
   <section class="method" id="method">
     <h2>How the value is worked out</h2>
-    <p>Implied value = TVL &times; comparable multiple &times; growth multiplier &times; tenure multiplier. The comparable multiple is the median market-cap / TVL of the launched protocols in the same category — at least three launched peers, or the market-wide median when a category has fewer. Growth is the seven-day TVL change, clamped to &minus;50% … +100% and weighted 0.6. Tenure runs from 0.85 for a protocol tracked a day to 1.15 for one tracked four years with no token. The same function scores every row; no protocol name is ever special-cased.</p>
+    <p>Implied value = TVL &times; shrunk category multiple &times; size factor. The category multiple is the shrunk log-mean of market-cap / TVL over the cleaned comparable peers in that category — log-ratios clipped to [&minus;4, +2], shrunk toward the global log-mean with k = 5 — and the size factor is exp(slope &times; (log TVL &minus; TVL centre)). Both are fitted at runtime from the sealed snapshot&rsquo;s own launched protocols, not set by hand. The same function scores every row; no protocol name is ever special-cased.</p>
+    <p class="fitline" id="fit-line"></p>
     <table class="multiples" id="multiples">
-      <thead><tr><th>Category</th><th>Comparable multiple</th><th>Launched peers</th><th>Source</th></tr></thead>
+      <thead><tr><th>Category</th><th>Comparable multiple</th><th>Cleaned peers</th><th>Source</th></tr></thead>
       <tbody></tbody>
     </table>
+  </section>
+
+  <section class="validation" id="validation">
+    <h2>Validation — how well this fits, and how wrong it can be</h2>
+    <p>Fitted and validated on the sealed 2026-11-14 snapshot only: 128 launched protocols with a market cap and a TVL. Five-fold cross-validation (protocol-level folds, crc32(slug) % 5, every fit retrained on the train fold only) scores each model out of sample on log(market-cap / TVL).</p>
+    <table class="cv">
+      <thead><tr><th>Model</th><th class="num">log-RMSE</th><th class="num">log-MAE</th><th class="num">Median APE</th><th class="num">80% cover</th></tr></thead>
+      <tbody>
+        <tr><td>A — v1 radar-comps-2</td><td class="num">2.386</td><td class="num">1.788</td><td class="num">91.9%</td><td class="num">0.852</td></tr>
+        <tr><td>B — OLS, logTVL + growth + age</td><td class="num">2.177</td><td class="num">1.670</td><td class="num">88.9%</td><td class="num">0.828</td></tr>
+        <tr><td>C — OLS + category dummies</td><td class="num">2.280</td><td class="num">1.726</td><td class="num">92.4%</td><td class="num">0.820</td></tr>
+        <tr><td>D — cleaned shrunk log-mean</td><td class="num">2.273</td><td class="num">1.769</td><td class="num">89.6%</td><td class="num">0.852</td></tr>
+        <tr><td>E — D + OLS features</td><td class="num">2.186</td><td class="num">1.662</td><td class="num">87.1%</td><td class="num">0.812</td></tr>
+        <tr><td>F — D + logTVL slope</td><td class="num">2.104</td><td class="num">1.597</td><td class="num">84.6%</td><td class="num">0.828</td></tr>
+        <tr class="adopted"><td><b>G — winsorized F (this entry)</b></td><td class="num"><b>2.106</b></td><td class="num"><b>1.604</b></td><td class="num"><b>86.3%</b></td><td class="num"><b>0.836</b></td></tr>
+        <tr><td>Naive global median</td><td class="num">2.277</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+      </tbody>
+    </table>
+    <p>The fitted model beats v1 out of sample (log-RMSE 2.106 vs 2.386; paired MSE difference +1.260 &plusmn; 0.428, t = +2.94) and beats the naive global median (2.277). Model F is statistically identical (paired MSE &minus;0.008 &plusmn; 0.081, t = &minus;0.10); G is adopted because winsorizing caps the thin-category fragility — the highest effective multiple on the board is 0.922&times;, where the unwinsorized fit reaches 1.633&times; on a single-peer category.</p>
+    <p>Every row carries an 80% interval of &times;0.075–&times;13.3 around its implied value, from the out-of-sample residual SD of 2.016 log units on comparable protocols. The interval is wide because the multiple is genuinely hard to predict: log(market-cap / TVL) spans 14 log-units across launched protocols, and the features jointly explain little (in-sample R&sup2; 0.186). The interval is honesty about that, not precision.</p>
+    <h3>Why growth and age carry no weight</h3>
+    <p>Seven-day growth and tenure are shown for every row, but both multipliers are 1.0000. The fitted evidence: the growth slope is &minus;3.82, but it falls to &minus;0.31 when the five highest-ratio protocols are dropped — the two highest ratios (rain 400&times;, nexo 69&times;) both have a 7-day TVL change of about &minus;37%, a denominator artefact of a collapsing TVL, and the association points the wrong way (fast growth would be rewarded). Age has no measurable effect: its correlation with the log-ratio is +0.002, and its fitted slope is &asymp; 0 once the five highest ratios are dropped (&minus;0.25 &rarr; &minus;0.00). Keeping the old hand multipliers would assert what the data contradicts.</p>
+    <p>Thin categories: Risk Curators — ranks #1–3, #6, #8–9, #11, #13 — rests on exactly one comparable peer (api3, 2.975&times;), and 89 of 178 rows sit in categories with two or fewer comparable peers. Shrinkage (k = 5) and winsorizing bound the damage, but the peer count next to every multiple above is the honest view of it.</p>
   </section>
 
   <section class="controls" aria-label="Filters">

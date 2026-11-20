@@ -152,8 +152,19 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 24px 48px; }
 .live-table tbody tr { cursor: default; }
 .live-table tbody tr:hover { background: none; }
 .foot { margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-faint); }
+/* Validation panel: the fitted formula's evidence, readable without running anything. */
+.validation { padding: 26px 0 6px; border-top: 1px solid var(--line); margin-top: 18px; }
+.validation h2 { font-family: var(--serif); font-size: 24px; margin: 0 0 8px; }
+.validation h3 { font-family: var(--serif); font-size: 19px; margin: 18px 0 6px; }
+.validation p { color: var(--ink-soft); max-width: 900px; margin: 0 0 12px; }
+.fitline { font-family: var(--mono); font-size: 13px; color: var(--ink-soft); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+.cv { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-bottom: 12px; }
+.cv th, .cv td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.cv th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); }
+.cv td.num, .cv th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.cv tr.adopted td { background: var(--signal-soft); }
 /* A routed view (board / detail / filter) hides the intro, so the view sits at the top. */
-body.routed .hero, body.routed .stats, body.routed .method { display: none; }
+body.routed .hero, body.routed .stats, body.routed .method, body.routed .validation { display: none; }
 body.routed .controls { margin-top: 0; border-top: none; padding-top: 18px; }
 @media (max-width: 760px) {
   .stats { grid-template-columns: repeat(2, 1fr); }

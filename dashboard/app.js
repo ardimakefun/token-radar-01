@@ -48,12 +48,21 @@
     stat(D.live_size, 'Live-token protocols set aside');
   function stat(b, label) { return '<div class="stat"><b>' + esc(b) + '</b><span>' + esc(label) + '</span></div>'; }
 
-  /* Comparables table. */
+  /* Fitted numbers, computed at runtime from the sealed snapshot. */
+  var fit = D.fit;
+  document.getElementById('fit-line').textContent =
+    'Fitted at runtime from the snapshot: global log-mean ' + fit.global_log_mean.toFixed(3) +
+    ' (multiple ' + fit.global_multiple.toFixed(4) + '×) · TVL centre ' + fit.tvl_center.toFixed(3) +
+    ' · logTVL slope ' + fit.slope.toFixed(3) + ' · ' + fit.comparable_peers + ' comparable peers of ' +
+    fit.launched_peers + ' launched · 80% interval ×' + fit.interval_low.toFixed(3) + '–×' +
+    fit.interval_high.toFixed(1) + ' (out-of-sample residual SD ' + fit.interval_sd.toFixed(3) + ' log units).';
+
+  /* Comparables table: the shrunk multiple and the cleaned peer count per category. */
   var multBody = document.querySelector('#multiples tbody');
   multBody.innerHTML = D.category_multiples.map(function (c) {
     return '<tr><td>' + esc(c.category) + '</td><td class="num">' + c.multiple.toFixed(3) + '×</td><td class="num">' + c.peers + '</td><td>' +
-      (c.source === 'category' ? 'Own category' : 'Market-wide fallback') + '</td></tr>';
-  }).join('') + '<tr><td><b>Market-wide</b></td><td class="num"><b>' + D.market_multiple.toFixed(3) + '×</b></td><td class="num">' + D.market_peers + '</td><td>All launched protocols</td></tr>';
+      (c.source === 'category' ? 'Own category, shrunk' : 'Global mean — no cleaned peer') + '</td></tr>';
+  }).join('') + '<tr><td><b>Global</b></td><td class="num"><b>' + D.market_multiple.toFixed(3) + '×</b></td><td class="num">' + D.market_peers + '</td><td>All cleaned comparable peers</td></tr>';
 
   /* Filter selects. */
   function fillSelect(id, values) {
@@ -168,8 +177,8 @@
     if (!r) { el.innerHTML = '<p class="detail-empty">Select a row to see its model breakdown and farm plan.</p>'; return; }
     var m = r.model;
     var multNote = m.multiple_source === 'category'
-      ? 'median of ' + m.multiple_peers + ' launched peers in ' + (r.category || 'this category')
-      : 'market-wide median — ' + (r.category || 'this category') + ' has fewer than ' + D.model.peer_min + ' launched peers';
+      ? 'shrunk mean of ' + m.multiple_peers + ' cleaned comparable peer' + (m.multiple_peers === 1 ? '' : 's') + ' in ' + (r.category || 'this category')
+      : 'global mean — ' + (r.category || 'this category') + ' has no cleaned comparable peer';
     el.innerHTML = '<div class="detail-card">' +
       '<div class="detail-rank">Rank ' + r.rank + ' of ' + D.board_size + ' · ' + (watch[r.slug] ? 'on the watchlist' : 'early row, below the floor') + '</div>' +
       '<h2>' + esc(r.name) + '</h2>' +
@@ -178,11 +187,13 @@
       '<table class="factors">' +
       '<tr><td>TVL</td><td>' + money(r.tvl_usd) + '</td></tr>' +
       '<tr><td>Comparable multiple</td><td>' + m.category_multiple.toFixed(3) + '× <span class="fnote">' + esc(multNote) + '</span></td></tr>' +
-      '<tr><td>Seven-day growth</td><td>' + pct(r.change_7d) + ' → ×' + m.growth_multiplier.toFixed(4) + '</td></tr>' +
-      '<tr><td>Age with no token</td><td>' + ageFmt(r.age_days) + ' → ×' + m.tenure_multiplier.toFixed(4) + '</td></tr>' +
+      '<tr><td>Size factor</td><td>×' + m.size_factor.toFixed(4) + ' <span class="fnote">exp(slope × (log TVL − centre))</span></td></tr>' +
+      '<tr><td>Seven-day growth</td><td>' + pct(r.change_7d) + ' → ×' + m.growth_multiplier.toFixed(4) + ' <span class="fnote">weight 0 — see Validation</span></td></tr>' +
+      '<tr><td>Age with no token</td><td>' + ageFmt(r.age_days) + ' → ×' + m.tenure_multiplier.toFixed(4) + ' <span class="fnote">weight 0 — see Validation</span></td></tr>' +
+      '<tr><td>80% interval</td><td>' + money(r.implied_low_usd) + ' – ' + money(r.implied_high_usd) + '</td></tr>' +
       '<tr class="total"><td>Implied value</td><td>' + money(r.implied_value_usd) + '</td></tr>' +
       '</table>' +
-      '<p class="fnote" style="font-size:12.5px;color:var(--ink-faint)">Model ' + esc(D.model_version) + ': TVL × comparable multiple × growth multiplier × tenure multiplier. board.json carries this row as ' + money(r.implied_value_usd) + '. This is an estimate, not a price.</p>' +
+      '<p class="fnote" style="font-size:12.5px;color:var(--ink-faint)">Model ' + esc(D.model_version) + ': TVL × shrunk category multiple × size factor. board.json carries this row as ' + money(r.implied_value_usd) + ', with an 80% interval of ' + money(r.implied_low_usd) + ' – ' + money(r.implied_high_usd) + '. This is an estimate, not a price.</p>' +
       '</div><div><h3>Farm plan</h3><ol class="farm">' +
       r.farm_steps.map(function (s) {
         var parts = s.split(' Cost: ');
