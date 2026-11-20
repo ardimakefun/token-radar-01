@@ -278,9 +278,14 @@ export function fitModel(protocols: SnapshotProtocol[]): FittedModel {
   const comp = launched.filter(isComparable);
   const cv = intervalFromCv(launched);
   // The interval comes from the runtime CV. If that ever fails to produce a
-  // finite SD, fall back to the documented design constants (see README).
-  const intervalLow = Number.isFinite(cv.low) ? cv.low : 0.075;
-  const intervalHigh = Number.isFinite(cv.high) ? cv.high : 13.3;
+  // finite SD, fail loudly: there is no fitted interval to fall back to, and
+  // stamping rows with an interval fitted from another snapshot would be
+  // silently wrong (SPEC §5.1 forbids fitted constants as literals).
+  if (!Number.isFinite(cv.sd) || !Number.isFinite(cv.low) || !Number.isFinite(cv.high)) {
+    throw new Error('launch radar: CV failed to produce a finite interval (residual SD is not finite)');
+  }
+  const intervalLow = cv.low;
+  const intervalHigh = cv.high;
   const byCategory = new Map<string, CategoryMultiple>();
   const seen = new Set<string>();
   for (const p of launched) if (p.category !== null) seen.add(p.category);
