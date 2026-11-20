@@ -1,17 +1,36 @@
-// Launch Radar: a comparables value model for pre-token protocols.
+// Launch Radar: a fitted comparables value model for pre-token protocols
+// (radar-fit-1).
 //
 // The board ranks protocols that record no token by what a token would be worth if the
-// protocol's record stayed as it is. The value comes from the snapshot alone:
+// protocol's record stayed as it is. The value is FITTED at runtime from the sealed
+// snapshot's own launched protocols, in log space (y = log(market-cap / TVL)):
 //
-//   comparable multiple = the median market-cap/TVL of the launched protocols in the
-//       same category (at least 3 launched peers), else the market-wide median
-//   growth multiplier   = 1 + clamp(change_7d, -50, +100) / 100 * 0.6
-//   tenure multiplier   = 0.85 + min(age_days, 1460) / 1460 * 0.30
-//   implied value       = TVL x comparable multiple x growth multiplier x tenure multiplier
+//   peer set        = the launched protocols that pass the watchlist exclusion rules,
+//                     ignoring the token test (88 of the 128 launched)
+//   log-ratios      = clipped to [-4, +2] before fitting, so one extreme peer cannot
+//                     carry a whole thin category
+//   category effect = the shrunk log-mean of a category's cleaned peers, shrunk toward
+//                     the global log-mean with k = 5; categories with no cleaned peer
+//                     use the global log-mean
+//   size effect     = slope x (log(TVL) - centre), the slope by one-variable OLS of
+//                     (clipped y - category estimate) on (log TVL - centre), where the
+//                     centre is the mean log TVL of the launched protocols
+//   implied value   = TVL x exp(category estimate + slope x (log(TVL) - centre))
 //
-// No protocol name is ever special-cased in the value: the same function scores every row.
-// Farm plans are built from each protocol's own record (category, chains, TVL, age); the
-// snapshot carries no airdrop flag, so no step claims a points program it does not record.
+// Growth and age carry weight 0, by design: the growth slope is outlier-driven and
+// points the wrong way (the two highest ratios both sit on a TVL collapse of about
+// -37%, a denominator artefact), and age has no measurable effect (correlation with
+// the log-ratio about +0.002). Both figures are still shown for every row, and the
+// dashboard states the fitted evidence. No protocol name is ever special-cased in
+// the value: the same function scores every row. Farm plans are built from each
+// protocol's own record (category, chains, TVL, age); the snapshot carries no
+// airdrop flag, so no step claims a points program it does not record.
+//
+// The 80% interval around each implied value comes from the same deterministic
+// 5-fold cross-validation the design prototype uses (fold = crc32(slug) % 5, the
+// fit retrained per fold with a train-only TVL centre, scored against the raw
+// log-ratio): the out-of-sample residual SD over comparable protocols only,
+// factor exp(+/-1.2816 x SD).
 
 /** One protocol of the sealed snapshot: exactly the ten fields the input carries. */
 export interface SnapshotProtocol {
@@ -36,31 +55,26 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-/** The model's constants, stated on the dashboard next to the formula. */
+/** The model's design constants: the shrinkage, the winsorizing bounds and the
+ *  80% interval's z-value. The FITTED constants (global log-mean, TVL centre,
+ *  slope, interval SD) are computed at runtime from the snapshot, never written
+ *  here. Stated on the dashboard next to the formula. */
 export interface ModelConstants {
-  peer_min: number;
-  growth_floor: number;
-  growth_cap: number;
-  growth_weight: number;
-  tenure_floor: number;
-  tenure_range: number;
-  tenure_days: number;
-  unknown_age_days: number;
+  shrink_k: number;
+  clip_low: number;
+  clip_high: number;
+  interval_z: number;
 }
 
 export const MODEL: ModelConstants = {
-  peer_min: 3,
-  growth_floor: -50,
-  growth_cap: 100,
-  growth_weight: 0.6,
-  tenure_floor: 0.85,
-  tenure_range: 0.3,
-  tenure_days: 1460,
-  unknown_age_days: 365,
+  shrink_k: 5,
+  clip_low: -4,
+  clip_high: 2,
+  interval_z: 1.2816,
 };
 
 /** The model's version label: the dashboard names it next to the formula. */
-export const MODEL_VERSION = 'radar-comps-2';
+export const MODEL_VERSION = 'radar-fit-1';
 
 /** How many launched protocols the live-token view carries, by market cap. */
 export const LIVE_ROWS = 20;
@@ -79,14 +93,6 @@ export function ageInDays(asOf: string, listedAt: string | null): number | null 
   const b = Date.parse(`${listedAt}T00:00:00Z`);
   if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
   return Math.max(0, Math.floor((a - b) / DAY_MS));
-}
-
-/** The median of a sorted-or-not list of numbers; null when empty. */
-function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const s = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
 }
 
 /** Whether the snapshot records no token at all for a protocol. */
@@ -111,9 +117,10 @@ const WRAPPED_CATEGORIES = new Set([
 /** Exchange names a protocol may not begin with: an exchange's own product is not a launch. */
 const EXCHANGE_NAMES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
 
-/** Whether a protocol is a launch candidate: pre-token and not a wrapped, staked or bridged product. */
-export function isLaunchCandidate(p: SnapshotProtocol): boolean {
-  if (!recordsNoToken(p)) return false;
+/** Whether a protocol is comparable: not a wrapped, staked or bridged product, not
+ *  versioned, not an exchange's own product. The token test is NOT part of this:
+ *  launched protocols are the peers the model is fitted on. */
+export function isComparable(p: SnapshotProtocol): boolean {
   if (p.category !== null && WRAPPED_CATEGORIES.has(p.category)) return false;
   if (VERSIONED.test(p.name)) return false;
   if (/\bwrapped\b|\bstaked\b|\bstaking\b/i.test(p.name)) return false;
@@ -121,77 +128,227 @@ export function isLaunchCandidate(p: SnapshotProtocol): boolean {
   return true;
 }
 
-/** One category's comparable multiple, from the launched protocols that trade in it. */
+/** Whether a protocol is a launch candidate: pre-token and not a wrapped, staked or bridged product. */
+export function isLaunchCandidate(p: SnapshotProtocol): boolean {
+  if (!recordsNoToken(p)) return false;
+  return isComparable(p);
+}
+
+/** One category's fitted multiple: the shrunk log-mean over its cleaned comparable
+ *  peers, as a multiple. `peers` is the cleaned comparable peer count: 0 when the
+ *  estimate is the pure global mean. */
 export interface CategoryMultiple {
   category: string;
   multiple: number;
   peers: number;
-  source: 'category' | 'market';
+  source: 'category' | 'global';
 }
 
-/** The market-wide multiple and every category's, all computed from the snapshot's launched set. */
-export interface Multiples {
-  market: CategoryMultiple;
+/** Everything the fitted model computes at runtime from the snapshot it is given. */
+export interface FittedModel {
+  globalLogMean: number;
+  globalMultiple: number;
+  tvlCenter: number;
+  slope: number;
+  launchedPeers: number;
+  comparablePeers: number;
+  intervalSd: number;
+  intervalLow: number;
+  intervalHigh: number;
   byCategory: Map<string, CategoryMultiple>;
 }
 
-/** Median market-cap/TVL per category over launched protocols, with a market-wide fallback. */
-export function computeMultiples(protocols: SnapshotProtocol[]): Multiples {
-  const launched = protocols.filter((p) => !recordsNoToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
-  const marketMedian = median(launched.map((p) => p.mcap_usd! / p.tvl_usd)) ?? 0.2;
-  const market: CategoryMultiple = { category: 'All launched protocols', multiple: marketMedian, peers: launched.length, source: 'market' };
-  const byCategory = new Map<string, CategoryMultiple>();
-  const seen = new Set<string>();
-  for (const p of launched) {
-    if (p.category !== null) seen.add(p.category);
+/** CRC-32 (IEEE) of a string: the deterministic 5-fold CV assigns fold = crc32(slug) % 5. */
+const CRC_TABLE: number[] = (() => {
+  const t: number[] = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t.push(c >>> 0);
   }
-  for (const category of [...seen].sort()) {
-    const peers = launched.filter((p) => p.category === category);
-    const med = median(peers.map((p) => p.mcap_usd! / p.tvl_usd));
-    if (med !== null && peers.length >= MODEL.peer_min) {
-      byCategory.set(category, { category, multiple: med, peers: peers.length, source: 'category' });
-    } else {
-      // The multiple is the market-wide median, so the peer count is the market's,
-      // not the thin category's own count: the number must match the median's source.
-      byCategory.set(category, { category, multiple: marketMedian, peers: launched.length, source: 'market' });
-    }
-  }
-  return { market, byCategory };
+  return t;
+})();
+
+function crc32(s: string): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < s.length; i++) c = CRC_TABLE[(c ^ s.charCodeAt(i)) & 0xff]! ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
 }
 
-/** The comparable multiple for one category: its own median when it has enough launched peers. */
-export function comparableFor(category: string | null, multiples: Multiples): CategoryMultiple {
+/** The mean of a non-empty list of numbers. */
+function mean(values: number[]): number {
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+/** A launched protocol's log-ratio, winsorized to the design bounds before fitting. */
+function clippedLogRatio(p: SnapshotProtocol): number {
+  const y = Math.log(p.mcap_usd! / p.tvl_usd);
+  return Math.min(MODEL.clip_high, Math.max(MODEL.clip_low, y));
+}
+
+/**
+ * One winsorized fit over a set of launched protocols: the global log-mean, the
+ * shrunk category log-means (k = 5) and the logTVL slope by one-variable OLS of
+ * (clipped y - category estimate) on (log TVL - centre). The centre is the mean
+ * log TVL of the launched set it is given, so a CV fold's fit uses its train
+ * fold only. Launched protocols are taken slug-sorted, so the fit is
+ * deterministic for a given snapshot.
+ */
+interface WinsorizedFit {
+  globalLogMean: number;
+  tvlCenter: number;
+  slope: number;
+  estimate: (category: string | null) => number;
+  peers: (category: string | null) => number;
+}
+
+function winsorizedFit(launched: SnapshotProtocol[]): WinsorizedFit {
+  const comp = launched.filter(isComparable);
+  const globalLogMean = mean(comp.map(clippedLogRatio));
+  const tvlCenter = mean(launched.map((p) => Math.log(p.tvl_usd)));
+  // Per-category clipped log-ratio sums over the comparable peers, shrunk toward
+  // the global log-mean. Categories with no comparable peer fall back to it.
+  const byCat = new Map<string, { n: number; sum: number }>();
+  for (const p of comp) {
+    if (p.category === null) continue;
+    const e = byCat.get(p.category);
+    if (e === undefined) byCat.set(p.category, { n: 1, sum: clippedLogRatio(p) });
+    else {
+      e.sum += clippedLogRatio(p);
+      e.n += 1;
+    }
+  }
+  const estimate = (category: string | null): number => {
+    if (category === null) return globalLogMean;
+    const e = byCat.get(category);
+    if (e === undefined) return globalLogMean;
+    return (e.n * (e.sum / e.n) + MODEL.shrink_k * globalLogMean) / (e.n + MODEL.shrink_k);
+  };
+  const peers = (category: string | null): number => {
+    if (category === null) return 0;
+    return byCat.get(category)?.n ?? 0;
+  };
+  // One-variable OLS slope of (clipped y - category estimate) on (log TVL - centre).
+  let num = 0;
+  let den = 0;
+  for (const p of comp) {
+    const x = Math.log(p.tvl_usd) - tvlCenter;
+    num += x * (clippedLogRatio(p) - estimate(p.category));
+    den += x * x;
+  }
+  const slope = den === 0 ? 0 : num / den;
+  return { globalLogMean, tvlCenter, slope, estimate, peers };
+}
+
+/**
+ * The 80% interval from the same deterministic 5-fold CV the design prototype
+ * uses: fold = crc32(slug) % 5, the winsorized fit retrained per fold with a
+ * train-only TVL centre, predictions scored against the RAW log-ratio, and the
+ * residual SD taken over comparable test rows only. The factor is
+ * exp(+/-interval_z x SD). Residuals are gathered in slug order, as in the
+ * prototype, so the SD matches it.
+ */
+function intervalFromCv(launched: SnapshotProtocol[]): { sd: number; low: number; high: number } {
+  const pred = new Map<string, number>();
+  for (let f = 0; f < 5; f++) {
+    const train = launched.filter((p) => crc32(p.slug) % 5 !== f);
+    const fit = winsorizedFit(train);
+    for (const p of launched) {
+      if (crc32(p.slug) % 5 !== f) continue;
+      pred.set(p.slug, fit.estimate(p.category) + fit.slope * (Math.log(p.tvl_usd) - fit.tvlCenter));
+    }
+  }
+  const residuals: number[] = [];
+  for (const p of launched) {
+    if (!isComparable(p)) continue;
+    residuals.push(Math.log(p.mcap_usd! / p.tvl_usd) - pred.get(p.slug)!);
+  }
+  if (residuals.length < 2) return { sd: NaN, low: NaN, high: NaN };
+  const m = mean(residuals);
+  const sd = Math.sqrt(residuals.reduce((a, r) => a + (r - m) * (r - m), 0) / (residuals.length - 1));
+  return { sd, low: Math.exp(-MODEL.interval_z * sd), high: Math.exp(MODEL.interval_z * sd) };
+}
+
+/** The fitted model, computed at runtime from the snapshot's launched set. */
+export function fitModel(protocols: SnapshotProtocol[]): FittedModel {
+  const launched = protocols
+    .filter((p) => !recordsNoToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0)
+    .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const fit = winsorizedFit(launched);
+  const comp = launched.filter(isComparable);
+  const cv = intervalFromCv(launched);
+  // The interval comes from the runtime CV. If that ever fails to produce a
+  // finite SD, fall back to the documented design constants (see README).
+  const intervalLow = Number.isFinite(cv.low) ? cv.low : 0.075;
+  const intervalHigh = Number.isFinite(cv.high) ? cv.high : 13.3;
+  const byCategory = new Map<string, CategoryMultiple>();
+  const seen = new Set<string>();
+  for (const p of launched) if (p.category !== null) seen.add(p.category);
+  for (const category of [...seen].sort()) {
+    const n = fit.peers(category);
+    byCategory.set(category, {
+      category,
+      multiple: Math.exp(fit.estimate(category)),
+      peers: n,
+      source: n >= 1 ? 'category' : 'global',
+    });
+  }
+  return {
+    globalLogMean: fit.globalLogMean,
+    globalMultiple: Math.exp(fit.globalLogMean),
+    tvlCenter: fit.tvlCenter,
+    slope: fit.slope,
+    launchedPeers: launched.length,
+    comparablePeers: comp.length,
+    intervalSd: cv.sd,
+    intervalLow,
+    intervalHigh,
+    byCategory,
+  };
+}
+
+/** The fitted multiple for one category: its shrunk estimate, else the global mean with 0 peers. */
+export function comparableFor(category: string | null, model: FittedModel): CategoryMultiple {
   if (category !== null) {
-    const hit = multiples.byCategory.get(category);
+    const hit = model.byCategory.get(category);
     if (hit !== undefined) return hit;
   }
-  return multiples.market;
+  return { category: 'All cleaned comparable protocols', multiple: model.globalMultiple, peers: 0, source: 'global' };
 }
 
 /** The implied value one protocol gets, with every factor the dashboard shows. */
 export interface Valuation {
   implied: number;
+  impliedLow: number;
+  impliedHigh: number;
   growthPct: number;
   growthMult: number;
   tenureMult: number;
   age: number | null;
   multiple: number;
   multiplePeers: number;
-  multipleSource: 'category' | 'market';
+  multipleSource: 'category' | 'global';
+  sizeFactor: number;
   categoryLabel: string;
 }
 
-export function valueProtocol(p: SnapshotProtocol, asOf: string, multiples: Multiples): Valuation {
+export function valueProtocol(p: SnapshotProtocol, asOf: string, model: FittedModel): Valuation {
   const age = ageInDays(asOf, p.listed_at);
   const rawGrowth = finite(p.change_7d, 0);
-  const growthPct = Math.min(MODEL.growth_cap, Math.max(MODEL.growth_floor, rawGrowth));
-  const growthMult = 1 + (growthPct / 100) * MODEL.growth_weight;
-  const ageForModel = age ?? MODEL.unknown_age_days;
-  const tenureMult = MODEL.tenure_floor + (Math.min(Math.max(ageForModel, 0), MODEL.tenure_days) / MODEL.tenure_days) * MODEL.tenure_range;
-  const comp = comparableFor(p.category, multiples);
-  const implied = Math.max(1, Math.round(p.tvl_usd * comp.multiple * growthMult * tenureMult));
+  const growthPct = Math.min(100, Math.max(-50, rawGrowth));
+  // Growth and age carry weight 0, by design: the fitted growth slope is
+  // outlier-driven and points the wrong way (the two highest ratios both sit
+  // on a TVL collapse of about -37%, a denominator artefact), and age has no
+  // measurable effect. The multipliers stay 1.0000; the dashboard states why.
+  const growthMult = 1;
+  const tenureMult = 1;
+  const comp = comparableFor(p.category, model);
+  const sizeFactor = Math.exp(model.slope * (Math.log(p.tvl_usd) - model.tvlCenter));
+  const implied = Math.max(1, Math.round(p.tvl_usd * comp.multiple * sizeFactor));
   return {
     implied,
+    impliedLow: Math.max(1, Math.round(implied * model.intervalLow)),
+    impliedHigh: Math.max(1, Math.round(implied * model.intervalHigh)),
     growthPct,
     growthMult,
     tenureMult,
@@ -199,6 +356,7 @@ export function valueProtocol(p: SnapshotProtocol, asOf: string, multiples: Mult
     multiple: comp.multiple,
     multiplePeers: comp.peers,
     multipleSource: comp.source,
+    sizeFactor,
     categoryLabel: p.category ?? 'Uncategorised',
   };
 }
@@ -535,10 +693,13 @@ export interface BoardRow {
   age_days: number | null;
   token_status: 'pre-token';
   implied_value_usd: number;
+  implied_low_usd: number;
+  implied_high_usd: number;
   model: {
     category_multiple: number;
     multiple_peers: number;
-    multiple_source: 'category' | 'market';
+    multiple_source: 'category' | 'global';
+    size_factor: number;
     growth_pct: number;
     growth_multiplier: number;
     tenure_multiplier: number;
@@ -567,7 +728,20 @@ export interface RadarData {
   model_version: string;
   market_multiple: number;
   market_peers: number;
-  category_multiples: { category: string; multiple: number; peers: number; source: 'category' | 'market' }[];
+  category_multiples: { category: string; multiple: number; peers: number; source: 'category' | 'global' }[];
+  /** The fitted constants, computed at runtime from the snapshot: the dashboard
+   *  prints them next to the formula. */
+  fit: {
+    global_log_mean: number;
+    global_multiple: number;
+    tvl_center: number;
+    slope: number;
+    launched_peers: number;
+    comparable_peers: number;
+    interval_sd: number;
+    interval_low: number;
+    interval_high: number;
+  };
   watchlist_size: number;
   watchlist: string[];
   board_size: number;
@@ -583,7 +757,7 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 }
 
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
-export function buildBoard(snapshot: Snapshot, multiples: Multiples): BoardRow[] {
+export function buildBoard(snapshot: Snapshot, model: FittedModel): BoardRow[] {
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug it names, whatever the candidate rule says.
@@ -597,7 +771,7 @@ export function buildBoard(snapshot: Snapshot, multiples: Multiples): BoardRow[]
     if (!chosen.has(p.slug) && isLaunchCandidate(p) && p.tvl_usd < snapshot.floor_usd) chosen.set(p.slug, p);
   }
   const scored = [...chosen.values()].map((p) => {
-    const v = valueProtocol(p, snapshot.as_of, multiples);
+    const v = valueProtocol(p, snapshot.as_of, model);
     return { p, v };
   });
   scored.sort((a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
@@ -613,10 +787,13 @@ export function buildBoard(snapshot: Snapshot, multiples: Multiples): BoardRow[]
     age_days: s.v.age,
     token_status: 'pre-token',
     implied_value_usd: s.v.implied,
+    implied_low_usd: s.v.impliedLow,
+    implied_high_usd: s.v.impliedHigh,
     model: {
       category_multiple: Math.round(s.v.multiple * 1e4) / 1e4,
       multiple_peers: s.v.multiplePeers,
       multiple_source: s.v.multipleSource,
+      size_factor: Math.round(s.v.sizeFactor * 1e4) / 1e4,
       growth_pct: s.v.growthPct,
       growth_multiplier: Math.round(s.v.growthMult * 1e4) / 1e4,
       tenure_multiplier: Math.round(s.v.tenureMult * 1e4) / 1e4,
@@ -645,8 +822,8 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
-  const multiples = computeMultiples(snapshot.protocols);
-  const board = buildBoard(snapshot, multiples);
+  const model = fitModel(snapshot.protocols);
+  const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const radar: RadarData = {
@@ -655,11 +832,22 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     floor_usd: snapshot.floor_usd,
     model: MODEL,
     model_version: MODEL_VERSION,
-    market_multiple: Math.round(multiples.market.multiple * 1e4) / 1e4,
-    market_peers: multiples.market.peers,
-    category_multiples: [...multiples.byCategory.values()]
+    market_multiple: Math.round(model.globalMultiple * 1e4) / 1e4,
+    market_peers: model.comparablePeers,
+    category_multiples: [...model.byCategory.values()]
       .map((c) => ({ category: c.category, multiple: Math.round(c.multiple * 1e4) / 1e4, peers: c.peers, source: c.source }))
       .sort((a, b) => b.multiple - a.multiple),
+    fit: {
+      global_log_mean: Math.round(model.globalLogMean * 1000) / 1000,
+      global_multiple: Math.round(model.globalMultiple * 10000) / 10000,
+      tvl_center: Math.round(model.tvlCenter * 1000) / 1000,
+      slope: Math.round(model.slope * 1000) / 1000,
+      launched_peers: model.launchedPeers,
+      comparable_peers: model.comparablePeers,
+      interval_sd: Math.round(model.intervalSd * 1000) / 1000,
+      interval_low: Math.round(model.intervalLow * 1000) / 1000,
+      interval_high: Math.round(model.intervalHigh * 10) / 10,
+    },
     watchlist_size: snapshot.watchlist.length,
     watchlist: [...snapshot.watchlist],
     board_size: board.length,
